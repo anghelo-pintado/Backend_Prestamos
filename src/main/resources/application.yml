@@ -1,0 +1,61 @@
+# CONFIGURACI�N DEL SERVIDOR
+server:
+  port: ${PORT:8080}
+spring:
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  # ZONA HORARIA Y LOCALE
+  jackson:
+    time-zone: America/Lima
+    locale: es_PE
+  # PERFIL ACTIVO DE SPRING
+  profiles:
+    active: dev
+
+# VARIABLES DE ENTORNO DE LA APLICACI�N
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+    expiration: ${JWT_EXPIRATION} # en milisegundos (ejemplo: 86400000 = 1 día)
+    refresh-token:
+        expiration: ${JWT_REFRESH_EXPIRATION} # en miliseg
+  reniec:
+    api-url: ${RENIEC_API_URL}
+    api-key: ${RENIEC_API_KEY}
+  uit:
+    value:
+      pen: ${UIT_PEN:5350.00}
+
+---
+# CONFIGURACI�N DE BASE DE DATOS (Perfil de Producci�n - Heroku)
+spring:
+  config:
+    activate:
+      on-profile: prod
+  datasource:
+    url: ${DATABASE_URL}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate # No crear/modificar tablas en prod
+
+---
+# CONFIGURACI�N DE BASE DE DATOS (Perfil de Desarrollo - H2)
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: jdbc:h2:mem:prestamosdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: update # Crear/actualizar tablas en dev
+  h2:
+    console:
+      enabled: true
