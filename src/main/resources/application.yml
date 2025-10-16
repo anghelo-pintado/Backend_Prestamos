@@ -39,7 +39,7 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      ddl-auto: validate # No crear/modificar tablas en prod
+      ddl-auto: create-drop # No crear/modificar tablas en prod
 
 ---
 # CONFIGURACI�N DE BASE DE DATOS (Perfil de Desarrollo - H2)
