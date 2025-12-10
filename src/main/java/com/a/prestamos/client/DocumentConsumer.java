@@ -1,10 +1,9 @@
 package com.a.prestamos.client;
 
-import com.a.prestamos.model.dto.ReniecResponseDto;
-import lombok.RequiredArgsConstructor;
+import com.a.prestamos.model.dto.apiclient.ReniecResponseDto;
+import com.a.prestamos.model.dto.apiclient.SunatResponseDto;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -12,7 +11,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 @Component
-public class ReniecConsumer {
+public class DocumentConsumer {
     @Autowired
     private WebClient.Builder webClientBuilder;
 
@@ -21,6 +20,12 @@ public class ReniecConsumer {
 
     @Value("${app.reniec.api-key}")
     private String reniecApiKey;
+
+    @Value("${app.sunat.api-url}")
+    private String sunatApiUrl;
+
+    @Value("${app.sunat.api-key}")
+    private String sunatApiKey;
 
     public ReniecResponseDto verifyByDni(String dni) {
         return webClientBuilder.build()
@@ -33,6 +38,20 @@ public class ReniecConsumer {
                                 .flatMap(errorBody -> Mono.error(new RuntimeException("Error al llamar a la API de RENIEC: " + errorBody)))
                 )
                 .bodyToMono(ReniecResponseDto.class)
+                .block();
+    }
+
+    public SunatResponseDto verifyByRuc(String ruc) {
+        return webClientBuilder.build()
+                .get()
+                .uri(sunatApiUrl, uriBuilder -> uriBuilder.queryParam("numero", ruc).build())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + sunatApiKey)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, response ->
+                        response.bodyToMono(String.class)
+                                .flatMap(errorBody -> Mono.error(new RuntimeException("Error al llamar a la API de SUNAT: " + errorBody)))
+                )
+                .bodyToMono(SunatResponseDto.class)
                 .block();
     }
 }

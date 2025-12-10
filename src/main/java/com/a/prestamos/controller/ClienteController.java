@@ -25,7 +25,7 @@ public class ClienteController {
     @PostMapping("/cliente/verificar")
     public ResponseEntity<?> verifyCustomer(@Valid @RequestBody VerificarClienteRequest request) {
         try {
-            Cliente verifiedCustomer = clienteService.verifyById(request.dni());
+            Cliente verifiedCustomer = clienteService.verifyByDocumentId(request.documentId());
             ClienteDto responseDto = ClienteDto.fromEntity(verifiedCustomer);
             return ResponseEntity.ok(responseDto);
         } catch (Exception ex) {

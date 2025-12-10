@@ -8,6 +8,7 @@ import com.a.prestamos.model.dto.prestamo.PrestamoRequest;
 import com.a.prestamos.model.entity.Cliente;
 import com.a.prestamos.model.entity.Cuota;
 import com.a.prestamos.model.entity.Prestamo;
+import com.a.prestamos.model.entity.enums.InstallmentState;
 import com.a.prestamos.service.IClienteService;
 import com.a.prestamos.service.IFinancialService;
 import com.a.prestamos.service.IPrestamoService;
@@ -32,12 +33,12 @@ public class PrestamoServiceImpl implements IPrestamoService {
     @Transactional
     public Prestamo createLoan(PrestamoRequest request) {
         // 1. Validar regla de negocio: Un solo préstamo por cliente
-        if (loanRepository.existsByCustomerDni(request.dni())) {
-            throw new LoanCreationException("El cliente con DNI " + request.dni() + " ya tiene un préstamo registrado.");
+        if (loanRepository.existsByCustomerDocumentId(request.documentId())) {
+            throw new LoanCreationException("El cliente con DNI/RUC " + request.documentId() + " ya tiene un préstamo registrado.");
         }
 
         // 2. Verificar y obtener el cliente
-        Cliente customer = customerService.verifyById(request.dni());
+        Cliente customer = customerService.verifyByDocumentId(request.documentId());
         customer.setPep(request.pep());
         customerService.save(customer); // Actualizar el estado PEP si es necesario
 
@@ -68,9 +69,37 @@ public class PrestamoServiceImpl implements IPrestamoService {
     }
 
     @Override
-    @Transactional(readOnly = true)
-    public Prestamo findLoanByDni(String dni) {
-        return loanRepository.findByCustomerDni(dni)
-                .orElseThrow(() -> new ResourceNotFoundException("No se encontró un préstamo para el DNI: " + dni));
+    @Transactional
+    public Prestamo findLoanByDocumentId(String documentId) {
+        Prestamo prestamo = loanRepository.findByCustomerDocumentId(documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("No se encontró un préstamo para el DNI/RUC: " + documentId));
+
+        // ================================
+        // 🔥 ACTUALIZAR AUTOMÁTICAMENTE CUOTAS VENCIDAS
+        // ================================
+        LocalDate hoy = LocalDate.now();
+
+        for (Cuota cuota : prestamo.getInstallments()) {
+            // Sólo interesa si la cuota NO está pagada
+            if (cuota.getBalance().compareTo(BigDecimal.ZERO) > 0) {
+
+                // Si la fecha ya pasó → marcar como vencida
+                if (hoy.isAfter(cuota.getDueDate())) {
+                    cuota.setInstallmentState(InstallmentState.VENCIDO);
+                } else {
+                    // Si aún no está vencida pero tampoco está pagada → pendiente
+                    if (cuota.getAmountPaid().compareTo(BigDecimal.ZERO) == 0) {
+                        cuota.setInstallmentState(InstallmentState.PENDIENTE);
+                    } else {
+                        cuota.setInstallmentState(InstallmentState.PAGADO_PARCIAL);
+                    }
+                }
+            }
+        }
+
+        // Guardar los cambios
+        installmentRepository.saveAll(prestamo.getInstallments());
+
+        return prestamo;
     }
 }

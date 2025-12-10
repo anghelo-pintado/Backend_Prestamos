@@ -9,7 +9,7 @@ import com.a.prestamos.model.entity.Cliente;
  * @param pep Indica si el cliente es una Persona Expuesta Políticamente.
  */
 public record ClienteDto(
-        String dni,
+        String documentId,
         String firstLastName,
         String secondLastName,
         String fullName,
@@ -22,7 +22,7 @@ public record ClienteDto(
      */
     public static ClienteDto fromEntity(Cliente cliente) {
         return new ClienteDto(
-                cliente.getDni(),
+                cliente.getDocumentId(),
                 cliente.getFirstLastName(),
                 cliente.getSecondLastName(),
                 cliente.getFullName(),

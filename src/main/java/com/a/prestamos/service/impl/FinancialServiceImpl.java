@@ -15,19 +15,24 @@ import java.util.List;
 public class FinancialServiceImpl implements IFinancialService {
     private static final int FINANCIAL_SCALE = 2; // 2 decimales para montos monetarios
     private static final RoundingMode ROUNDING_MODE = RoundingMode.HALF_UP;
-    private static final MathContext MC = new MathContext(18, RoundingMode.HALF_UP); // Alta precisión para cálculos intermedios
+    private static final MathContext MC = new MathContext(18, RoundingMode.HALF_UP); // Alta precisión para cálculos
+    // intermedios
 
+    // Constantes para IGV (18%)
+    private static final BigDecimal IGV_RATE = new BigDecimal("0.18");
+    private static final BigDecimal DIVISOR_IGV = new BigDecimal("1.18");
 
     @Override
     public BigDecimal calculateTem(BigDecimal tea) {
         // Fórmula: TEM = (1 + TEA)^(1/12) - 1
         BigDecimal base = BigDecimal.ONE.add(tea);
         BigDecimal exponent = BigDecimal.ONE.divide(new BigDecimal("12"), MC);
-        BigDecimal result = base.pow(exponent.intValue(), MC); // Esta implementación de pow no es ideal para exponentes fraccionarios.
+        BigDecimal result = base.pow(exponent.intValue(), MC); // Esta implementación de pow no es ideal para exponentes
+        // fraccionarios.
         // Una mejor aproximación es usar raíces o logaritmos.
         // Para simplificar, vamos a usar una aproximación con double.
         double baseDouble = base.doubleValue();
-        double exponentDouble = 1.0/12.0;
+        double exponentDouble = 1.0 / 12.0;
         BigDecimal monthlyFactor = BigDecimal.valueOf(Math.pow(baseDouble, exponentDouble));
 
         return monthlyFactor.subtract(BigDecimal.ONE);
@@ -57,33 +62,52 @@ public class FinancialServiceImpl implements IFinancialService {
     @Override
     public List<Cuota> generateSchedule(Prestamo prestamo, BigDecimal tem) {
         List<Cuota> schedule = new ArrayList<>();
-//        BigDecimal currentBalance = prestamo.getPrincipal();
-        BigDecimal fixedInstallment = prestamo.getInstallmentAmount();
+
+        BigDecimal currentBalance = prestamo.getPrincipal(); // Saldo inicial
+        BigDecimal fixedInstallment = prestamo.getInstallmentAmount(); // Cuota fija
 
         for (int i = 1; i <= prestamo.getMonths(); i++) {
+
+            // 1. Calcular Interés Global del periodo (Saldo * Tasa)
+            BigDecimal interesTotalMes = currentBalance.multiply(tem).setScale(2, RoundingMode.HALF_UP);
+
+            // 2. Desglosar IGV del Interés (SUNAT)
+            // Fórmula: Valor Venta = Precio / 1.18
+            BigDecimal interesBase = interesTotalMes.divide(DIVISOR_IGV, 2, RoundingMode.HALF_UP);
+            BigDecimal igvMes = interesTotalMes.subtract(interesBase);
+
+            // 3. Calcular Amortización de Capital
+            // Capital = Cuota Fija - Interés Total
+            BigDecimal capitalMes = fixedInstallment.subtract(interesTotalMes);
+
+            // 4. Actualizar Saldo Deudor
+            currentBalance = currentBalance.subtract(capitalMes);
+
+            // Ajuste por si el saldo se vuelve negativo por centavos en la última cuota
+            if (i == prestamo.getMonths() && currentBalance.compareTo(BigDecimal.ZERO) != 0) {
+                // En la ultima cuota, ajustamos el capital para que el saldo quede en 0
+                // perfecto
+                capitalMes = capitalMes.add(currentBalance);
+                currentBalance = BigDecimal.ZERO;
+                // Recalculamos la cuota fija final solo para este mes (ajuste de centavos)
+                fixedInstallment = capitalMes.add(interesTotalMes);
+            }
+
+            // 5. Crear Entidad Cuota
             Cuota installment = new Cuota();
             installment.setLoan(prestamo);
             installment.setNum(i);
             installment.setDueDate(prestamo.getStartDate().plusDays(30L * i));
-            installment.setAmount(fixedInstallment);
 
-            // Cálculo de interés para la cuota actual
-//            BigDecimal interest = currentBalance.multiply(tem).setScale(FINANCIAL_SCALE, ROUNDING_MODE);
-//            installment.setInterest(interest);
+            // --- DATOS FINANCIEROS CLAVE ---
+            installment.setPrincipal(capitalMes); // Va al JSON como Inafecto
+            installment.setInterest(interesBase); // Va al JSON como Gravado
+            installment.setIgv(igvMes); // Va al JSON como Impuesto
+            installment.setAmount(fixedInstallment); // Total a pagar
+            // -------------------------------
 
-            // Ajuste para la última cuota
-//            if (i == prestamo.getMonths()) {
-//                BigDecimal principalForLastInstallment = currentBalance;
-//                installment.setPrincipal(principalForLastInstallment);
-//                installment.setAmount(principalForLastInstallment.add(interest));
-//                installment.setBalance(BigDecimal.ZERO.setScale(FINANCIAL_SCALE));
-//            } else {
-//                BigDecimal principalForInstallment = fixedInstallment.subtract(interest);
-//                installment.setPrincipal(principalForInstallment);
-//                installment.setAmount(fixedInstallment);
-//                currentBalance = currentBalance.subtract(principalForInstallment);
-//                installment.setBalance(currentBalance);
-//            }
+            installment.setBalance(fixedInstallment); // Inicialmente debe todo
+            installment.setAmountPaid(BigDecimal.ZERO);
 
             schedule.add(installment);
         }

@@ -1,4 +1,4 @@
-package com.a.prestamos.model.dto;
+package com.a.prestamos.model.dto.apiclient;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 

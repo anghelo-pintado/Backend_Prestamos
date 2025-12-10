@@ -6,9 +6,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 public record PrestamoRequest(
-        @NotBlank(message = "El DNI no puede estar vacío.")
-        @Pattern(regexp = "\\d{8}", message = "El DNI debe contener 8 dígitos.")
-        String dni,
+        @NotBlank(message = "El DNI/RUC no puede estar vacío.")
+        @Pattern(regexp = "\\d{8}|\\d{11}", message = "Debe ser DNI (8 dígitos) o RUC (11 dígitos).")
+        String documentId,
 
         @NotNull(message = "El monto principal es requerido.")
         @Positive(message = "El monto principal debe ser mayor a cero.")
@@ -26,5 +26,4 @@ public record PrestamoRequest(
         boolean pep,
 
         LocalDate startDate
-) {
-}
+) {}

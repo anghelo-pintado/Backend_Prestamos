@@ -46,16 +46,16 @@ public class PrestamoController {
     /**
      * Endpoint para buscar un préstamo por el DNI del cliente.
      *
-     * @param dni El DNI de 8 dígitos del cliente.
+     * @param documentId El DNI de 8 dígitos del cliente.
      * @return Respuesta HTTP 200 OK con el detalle del préstamo encontrado.
      */
     @GetMapping("/prestamo")
-    public ResponseEntity<?> findLoanByDni(
+    public ResponseEntity<?> findLoanByDocumentId(
             @RequestParam
-            @Pattern(regexp = "\\d{8}", message = "El DNI debe contener 8 dígitos.")
-            String dni) {
+            @Pattern(regexp = "\\d{8}|\\d{11}", message = "DNI/RUC.")
+            String documentId) {
 
-        Prestamo foundLoan = loanService.findLoanByDni(dni);
+        Prestamo foundLoan = loanService.findLoanByDocumentId(documentId);
         DetallePrestamoDto responseDto = DetallePrestamoDto.fromEntity(foundLoan);
 
         return ResponseEntity.ok(responseDto);

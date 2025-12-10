@@ -5,11 +5,11 @@ import jakarta.validation.constraints.Pattern;
 
 /**
  * DTO para la solicitud de verificación de cliente.
- * @param dni El DNI de 8 dígitos a verificar.
+ * @param documentId El DNI/RUC a verificar.
  */
 public record VerificarClienteRequest(
-        @NotBlank(message = "El DNI no puede estar vacío.")
-        @Pattern(regexp = "\\d{8}", message = "El DNI debe contener exactamente 8 dígitos.")
-        String dni
+        @NotBlank(message = "El DNI/RUC no puede estar vacío.")
+        @Pattern(regexp = "\\d{8}|\\d{11}", message = "Debe ser DNI (8 dígitos) o RUC (11 dígitos).")
+        String documentId
 ) {
 }

@@ -38,6 +38,17 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
 
+        // 1. EXCLUIR H2 CONSOLE Y SWAGGER
+        String path = request.getServletPath();
+        if (path.startsWith("/h2-console") ||
+                path.startsWith("/swagger-ui") ||
+                path.startsWith("/v3/api-docs") ||
+                path.contains("/pagos/mercadopago/webhook")) {
+
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         final String authHeader = request.getHeader("Authorization");
         final String jwt;
         final String userEmail;

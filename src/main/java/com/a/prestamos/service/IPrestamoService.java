@@ -15,8 +15,8 @@ public interface IPrestamoService {
     /**
      * Busca un préstamo existente a partir del DNI del cliente.
      *
-     * @param dni El DNI del cliente.
+     * @param documentId El DNI del cliente.
      * @return La entidad Loan encontrada.
      */
-    Prestamo findLoanByDni(String dni);
+    Prestamo findLoanByDocumentId(String documentId);
 }

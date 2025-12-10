@@ -6,6 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.Optional;
 
 public interface PrestamoDao extends JpaRepository<Prestamo, Long> {
-    boolean existsByCustomerDni(String dni);
-    Optional<Prestamo> findByCustomerDni(String dni);
+    boolean existsByCustomerDocumentId(String documentId);
+    Optional<Prestamo> findByCustomerDocumentId(String documentId);
 }

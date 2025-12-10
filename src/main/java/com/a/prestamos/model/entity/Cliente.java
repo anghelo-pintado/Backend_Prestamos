@@ -1,9 +1,7 @@
 package com.a.prestamos.model.entity;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import com.a.prestamos.model.entity.enums.DocumentType;
+import jakarta.persistence.*;
 import lombok.Data;
 
 import java.time.Instant;
@@ -13,11 +11,17 @@ import java.time.Instant;
 @Table(name = "clientes")
 public class Cliente {
     @Id
-    @Column(length = 8)
-    private String dni;
+    @Column(length = 15) // Aumentamos longitud para soportar RUC (11 dígitos)
+    private String documentId; // Antes 'documentId'. Ahora guardará DNI o RUC.
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private DocumentType documentType; // ENUM: DNI, RUC
 
     @Column(nullable = false)
     private String fullName;
+
+    private String address; // OBLIGATORIO para Facturas (RUC)
 
     private String firstName;
     private String firstLastName;

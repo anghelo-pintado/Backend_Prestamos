@@ -19,7 +19,7 @@ public record DetallePrestamoDto(
         List<CuotaDto> schedule
 ) {
     public static DetallePrestamoDto fromEntity(Prestamo entity) {
-        // Carga perezosa de cuotas
+        // Carga perezosa de cuotas usando el nuevo mapeo de CuotaDto
         List<CuotaDto> scheduleDto = entity.getInstallments().stream()
                 .map(CuotaDto::fromEntity)
                 .collect(Collectors.toList());
