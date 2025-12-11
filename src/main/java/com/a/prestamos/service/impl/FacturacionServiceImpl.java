@@ -105,7 +105,7 @@ public class FacturacionServiceImpl {
 
             // Obtener correlativo (Lógica simple, idealmente usar una secuencia en BD)
             long ultimoCorrelativo = comprobanteDao.countComprobantesBySerie(serie);
-            String correlativo = String.valueOf(ultimoCorrelativo + 1);
+            String correlativo = String.format("%08d", ultimoCorrelativo + 1);
 
             // 2. CALCULAR PROPORCIÓN DEL PAGO
             BigDecimal montoPagado = pago.getAmountPaid();
@@ -220,6 +220,7 @@ public class FacturacionServiceImpl {
                                     .build())
                             .build())
                     .mtoOperGravadas(totalGravadas)
+                    .mtoOperExoneradas(BigDecimal.ZERO)
                     .mtoOperInafectas(totalInafectas)
                     .mtoIGV(totalIgv)
                     .totalImpuestos(totalIgv)

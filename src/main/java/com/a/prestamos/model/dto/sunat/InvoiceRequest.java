@@ -19,6 +19,7 @@ public class InvoiceRequest {
 
     // Totales
     private BigDecimal mtoOperGravadas;
+    private BigDecimal mtoOperExoneradas;// "10" Gravado, "30" Inafecto
     private BigDecimal mtoOperInafectas;
     private BigDecimal mtoIGV;
     private BigDecimal totalImpuestos;

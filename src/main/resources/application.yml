@@ -19,7 +19,7 @@ app:
     secret: ${JWT_SECRET}
     expiration: ${JWT_EXPIRATION} # en milisegundos (ejemplo: 86400000 = 1 día)
     refresh-token:
-        expiration: ${JWT_REFRESH_EXPIRATION} # en miliseg
+      expiration: ${JWT_REFRESH_EXPIRATION} # en miliseg
   reniec:
     api-url: ${RENIEC_API_URL}
     api-key: ${RENIEC_API_KEY}
@@ -46,11 +46,11 @@ app:
     emisor-direccion: "Av. América Sur N.º 3145, Urbanización Monserrate"
   do:
     spaces:
-        access-key: ${DO_SPACES_ACCESS_KEY}
-        secret-key: ${DO_SPACES_SECRET_KEY}
-        region: ${DO_SPACES_REGION}
-        bucket-name: ${DO_SPACES_BUCKET_NAME}
-        endpoint-url: ${DO_SPACES_ENDPOINT_URL}
+      access-key: ${DO_SPACES_ACCESS_KEY}
+      secret-key: ${DO_SPACES_SECRET_KEY}
+      region: ${DO_SPACES_REGION}
+      bucket-name: ${DO_SPACES_BUCKET_NAME}
+      endpoint-url: ${DO_SPACES_ENDPOINT_URL}
 ---
 # CONFIGURACI�N DE BASE DE DATOS (Perfil de Producci�n - Heroku)
 spring:
@@ -63,7 +63,7 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      ddl-auto: update # No crear/modificar tablas en prod
+      ddl-auto: create-drop # No crear/modificar tablas en prod
 
 ---
 # CONFIGURACI�N DE BASE DE DATOS (Perfil de Desarrollo - H2)

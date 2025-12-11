@@ -1,6 +1,7 @@
 package com.a.prestamos.service.impl;
 
 import com.a.prestamos.exception.prestamo.ResourceNotFoundException;
+import com.a.prestamos.model.dao.CajaDao;
 import com.a.prestamos.model.dao.CuotaDao;
 import com.a.prestamos.model.dao.PagoDao;
 import com.a.prestamos.model.dto.mercadoPago.MercadoPagoPreferenceResponse;
@@ -8,6 +9,7 @@ import com.a.prestamos.model.dto.pago.PagoRequest;
 import com.a.prestamos.model.dto.pago.PagoResponse;
 import com.a.prestamos.model.entity.Cuota;
 import com.a.prestamos.model.entity.Pago;
+import com.a.prestamos.model.entity.enums.CajaState;
 import com.a.prestamos.model.entity.enums.InstallmentState;
 import com.a.prestamos.model.entity.enums.PaymentMethod;
 import com.a.prestamos.model.entity.enums.PaymentState;
@@ -61,9 +63,15 @@ public class PagoServiceImpl implements IPagoService {
     private static final BigDecimal REDONDEO_EFECTIVO = new BigDecimal("0.05");
     private static final BigDecimal TASA_MORA = new BigDecimal("0.01"); // 1%
 
+    private final CajaDao cajaDao; // <--- AGREGAR ESTO
+
     @Override
     @Transactional
     public PagoResponse registrarPago(PagoRequest request) {
+
+        cajaDao.findByEstado(CajaState.ABIERTA)
+                .orElseThrow(() -> new IllegalStateException("⛔ NO SE PUEDE PAGAR: La caja está cerrada. Abra caja para realizar operaciones."));
+
         // 1. Obtener la cuota
         Cuota cuota = cuotaDao.findById(request.cuotaId())
                 .orElseThrow(() -> new ResourceNotFoundException("Cuota no encontrada con ID: " + request.cuotaId()));
@@ -110,20 +118,29 @@ public class PagoServiceImpl implements IPagoService {
         // Si el cliente paga menos de la deudaTotalExigible, asumimos que es pago parcial -> Mora = 0
         boolean esPagoParcial = request.montoPagado().compareTo(deudaTotalExigible) < 0;
 
-        BigDecimal moraACobrar;
-        BigDecimal capitalAmortizado; // Parte del dinero que baja el saldo de la cuota
+        BigDecimal moraACobrar = BigDecimal.ZERO;
+        BigDecimal capitalAmortizado = BigDecimal.ZERO;
 
-        if (esPagoParcial) {
-            // CASO A: PAGO PARCIAL -> PERDONAMOS LA MORA
+        // CASO 1: Cuota VENCIDA (Fecha actual > Vencimiento)
+        if (LocalDate.now().isAfter(cuota.getDueDate())) {
+            // Regla del profesor: "Si ya venció, ya tiene mora. Ya no se perdona."
+            // Prioridad de pago: Primero se paga la Mora, el resto a Capital.
+
+            if (request.montoPagado().compareTo(moraCalculada) <= 0) {
+                // El pago es tan pequeño que solo cubre mora (o parte de ella)
+                moraACobrar = request.montoPagado();
+                capitalAmortizado = BigDecimal.ZERO;
+            } else {
+                // Paga toda la mora y sobra dinero para capital
+                moraACobrar = moraCalculada;
+                capitalAmortizado = request.montoPagado().subtract(moraACobrar);
+            }
+        }
+        // CASO 2: Cuota AL DÍA (Pago puntual o adelantado)
+        else {
+            // Regla del profesor: "Si pago antes... ahí sí se perdona" [cite: 143]
             moraACobrar = BigDecimal.ZERO;
-            // Todo el dinero entra a capital
             capitalAmortizado = request.montoPagado();
-            log.info("Mora de {} perdonada por pago parcial en cuota {}", moraCalculada, cuota.getId());
-        } else {
-            // CASO B: PAGO TOTAL -> COBRAMOS LA MORA
-            moraACobrar = moraCalculada;
-            // El dinero sobrante tras cobrar mora va a capital
-            capitalAmortizado = request.montoPagado().subtract(moraACobrar);
         }
 
         // =================================================================================
@@ -137,6 +154,9 @@ public class PagoServiceImpl implements IPagoService {
             BigDecimal montoRedondeado = redondearEfectivo(request.montoPagado());
             ajusteRedondeo = montoRedondeado.subtract(request.montoPagado());
 
+            System.out.printf("Redondeo efectivo: Monto original=%.2f, Monto redondeado=%.2f, Ajuste=%.2f%n",
+                    request.montoPagado(), montoRedondeado, ajusteRedondeo);
+
             if (request.montoRecibido() != null && request.montoRecibido().compareTo(montoRedondeado) > 0) {
                 vuelto = request.montoRecibido().subtract(montoRedondeado);
             }
@@ -148,11 +168,10 @@ public class PagoServiceImpl implements IPagoService {
         pago.setInstallment(cuota);
 
         // OJO: amountPaid es lo que amortiza al capital en BD
+        // Actualizamos el objeto Pago con los valores calculados
         pago.setAmountPaid(capitalAmortizado);
-
-        // Guardamos lo que se cobró de mora
         pago.setMontMora(moraACobrar);
-        pago.setMoraPerdonada(esPagoParcial && moraCalculada.compareTo(BigDecimal.ZERO) > 0);
+        pago.setMoraPerdonada(false);
 
         pago.setAmountReceived(request.montoRecibido());
         pago.setChange(vuelto);
@@ -162,6 +181,7 @@ public class PagoServiceImpl implements IPagoService {
         pago.setOperationTrace(request.numeroOperacion());
         pago.setObservations(request.observaciones());
         pago.setPaymentState(PaymentState.ACTIVO);
+
 
         // 7. Actualizar la cuota
         BigDecimal nuevoMontoPagado = cuota.getAmountPaid().add(request.montoPagado());
@@ -215,6 +235,11 @@ public class PagoServiceImpl implements IPagoService {
     @Override
     @Transactional
     public MercadoPagoPreferenceResponse crearPreferenciaMercadoPago(Long cuotaId, BigDecimal monto) {
+
+        cajaDao.findByEstado(CajaState.ABIERTA)
+                .orElseThrow(() -> new IllegalStateException("⛔ NO SE PUEDE PAGAR: La caja está cerrada. Abra caja para realizar operaciones."));
+
+
         // 1. Obtener la cuota
         Cuota cuota = cuotaDao.findById(cuotaId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cuota no encontrada con ID: " + cuotaId));
@@ -520,9 +545,16 @@ public class PagoServiceImpl implements IPagoService {
      * Redondea un monto al múltiplo más cercano de 0.05 (para pagos en efectivo).
      */
     private BigDecimal redondearEfectivo(BigDecimal monto) {
-        // Dividir entre 0.05, redondear, y multiplicar por 0.05
-        return monto.divide(REDONDEO_EFECTIVO, 0, RoundingMode.HALF_UP)
-                .multiply(REDONDEO_EFECTIVO);
+        BigDecimal centavos = monto.remainder(new BigDecimal("0.10")); // Obtiene 0.0X
+        BigDecimal base = monto.subtract(centavos); // Parte sin el último dígito de céntimos
+
+        if (centavos.compareTo(new BigDecimal("0.05")) >= 0) {
+            // 0.05, 0.06, 0.07, 0.08, 0.09 → sube a 0.10
+            return base.add(new BigDecimal("0.10"));
+        } else {
+            // 0.00, 0.01, 0.02, 0.03, 0.04 → queda en 0.00
+            return base;
+        }
     }
 
     /**

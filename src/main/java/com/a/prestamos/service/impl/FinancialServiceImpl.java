@@ -97,7 +97,7 @@ public class FinancialServiceImpl implements IFinancialService {
             Cuota installment = new Cuota();
             installment.setLoan(prestamo);
             installment.setNum(i);
-            installment.setDueDate(prestamo.getStartDate().plusDays(30L * i));
+            installment.setDueDate(prestamo.getStartDate().plusMonths(i));
 
             // --- DATOS FINANCIEROS CLAVE ---
             installment.setPrincipal(capitalMes); // Va al JSON como Inafecto

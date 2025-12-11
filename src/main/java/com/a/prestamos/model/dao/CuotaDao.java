@@ -26,7 +26,7 @@ public interface CuotaDao extends JpaRepository<Cuota, Long> {
      * Busca cuotas vencidas (fecha < hoy y no pagadas).
      */
     @Query("SELECT c FROM Cuota c WHERE c.loan.id = :loanId " +
-            "AND c.dueDate < :fecha AND c.installmentState != 'PAGADA' ORDER BY c.num ASC")
+            "AND c.dueDate < :fecha AND c.installmentState != 'PAGADO' ORDER BY c.num ASC")
     List<Cuota> findCuotasVencidas(@Param("loanId") Long loanId, @Param("fecha") LocalDate fecha);
 
     /**
@@ -40,7 +40,7 @@ public interface CuotaDao extends JpaRepository<Cuota, Long> {
      * Obtiene la primera cuota que debe pagarse (la más antigua no pagada).
      */
     @Query("SELECT c FROM Cuota c WHERE c.loan.id = :loanId " +
-            "AND c.installmentState != 'PAGADA' ORDER BY c.num ASC LIMIT 1")
+            "AND c.installmentState != 'PAGADO' ORDER BY c.num ASC LIMIT 1")
     Optional<Cuota> findPrimeraCuotaPendiente(@Param("loanId") Long loanId);
 
     /**

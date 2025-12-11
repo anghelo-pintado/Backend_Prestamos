@@ -58,6 +58,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/api/v1/pagos/mercadopago/webhook",
                                 "/api/v1/auth/**",
+                                "/error",
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",

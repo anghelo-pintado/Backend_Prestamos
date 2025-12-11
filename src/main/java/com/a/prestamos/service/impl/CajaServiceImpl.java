@@ -79,13 +79,19 @@ public class CajaServiceImpl {
         BigDecimal montoFisico = req.montoFisico();
         BigDecimal diferencia = montoFisico.subtract(saldoEsperado);
 
-        // 4. REGLA DE ORO: BLOQUEO SI HAY DIFERENCIA
+        // LÓGICA DE INCIDENCIA
         if (diferencia.compareTo(BigDecimal.ZERO) != 0) {
-            String tipo = diferencia.compareTo(BigDecimal.ZERO) > 0 ? "sobrante" : "faltante";
-            throw new IllegalStateException(
-                    String.format("Error de Cuadre: Existe un %s de S/ %s. El sistema espera S/ %s. Verifique su dinero.",
-                            tipo, diferencia.abs(), saldoEsperado)
-            );
+            // Si hay diferencia y NO ha confirmado el descuadre, lanzamos error (alerta al usuario)
+            if (!req.confirmarDescuadre()) {
+                String tipo = diferencia.compareTo(BigDecimal.ZERO) > 0 ? "sobrante" : "faltante";
+                throw new IllegalStateException(
+                        String.format("⚠️ DESCUADRE: Hay un %s de S/ %s. Sistema: S/ %s vs Físico: S/ %s. " +
+                                        "Marque la casilla de 'Confirmar Descuadre' para proceder.",
+                                tipo, diferencia.abs(), saldoEsperado, req.montoFisico())
+                );
+            }
+            // Si SÍ confirmó, guardamos la observación (incidencia)
+            caja.setObservaciones(req.observaciones()); // Asegúrate de tener este campo en la Entidad Caja
         }
 
         // 5. Si cuadra (diferencia 0), procedemos al cierre

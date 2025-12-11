@@ -47,6 +47,8 @@ public class Caja {
     @Column(nullable = false, length = 20)
     private CajaState estado; // Crear enum: ABIERTA, CERRADA
 
+    private String observaciones; // Opcional para el cajero al cerrar
+
     @PrePersist
     public void prePersist() {
         if (this.fechaApertura == null) this.fechaApertura = LocalDateTime.now();
