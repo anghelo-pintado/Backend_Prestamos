@@ -9,6 +9,7 @@ import com.a.prestamos.model.entity.Cliente;
 import com.a.prestamos.model.entity.Cuota;
 import com.a.prestamos.model.entity.Prestamo;
 import com.a.prestamos.model.entity.enums.InstallmentState;
+import com.a.prestamos.model.entity.enums.LoanState;
 import com.a.prestamos.service.IClienteService;
 import com.a.prestamos.service.IFinancialService;
 import com.a.prestamos.service.IPrestamoService;
@@ -33,8 +34,17 @@ public class PrestamoServiceImpl implements IPrestamoService {
     @Transactional
     public Prestamo createLoan(PrestamoRequest request) {
         // 1. Validar regla de negocio: Un solo préstamo por cliente
-        if (loanRepository.existsByCustomerDocumentId(request.documentId())) {
-            throw new LoanCreationException("El cliente con DNI/RUC " + request.documentId() + " ya tiene un préstamo registrado.");
+//        if (loanRepository.existsByCustomerDocumentId(request.documentId())) {
+//            throw new LoanCreationException("El cliente con DNI/RUC " + request.documentId() + " ya tiene un préstamo registrado.");
+//        }
+
+        boolean tieneDeudaActiva = loanRepository.existsByCustomerDocumentId_AndLoanState(
+                request.documentId(),
+                LoanState.ACTIVO // O cualquier estado que no sea PAGADO/RECHAZADO
+        );
+
+        if (tieneDeudaActiva) {
+            throw new IllegalStateException("El cliente ya tiene un préstamo en curso. Debe cancelarlo primero.");
         }
 
         // 2. Verificar y obtener el cliente
@@ -71,7 +81,7 @@ public class PrestamoServiceImpl implements IPrestamoService {
     @Override
     @Transactional
     public Prestamo findLoanByDocumentId(String documentId) {
-        Prestamo prestamo = loanRepository.findByCustomerDocumentId(documentId)
+        Prestamo prestamo = loanRepository.findByCustomerDocumentIdAndLoanState(documentId, LoanState.ACTIVO)
                 .orElseThrow(() -> new ResourceNotFoundException("No se encontró un préstamo para el DNI/RUC: " + documentId));
 
         // ================================

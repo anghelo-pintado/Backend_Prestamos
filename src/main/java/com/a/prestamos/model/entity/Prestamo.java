@@ -1,5 +1,6 @@
 package com.a.prestamos.model.entity;
 
+import com.a.prestamos.model.entity.enums.LoanState;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -35,6 +36,10 @@ public class Prestamo {
 
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal installmentAmount;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    private LoanState loanState = LoanState.ACTIVO;
 
     @OneToMany(mappedBy = "loan", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<Cuota> installments = new ArrayList<>();

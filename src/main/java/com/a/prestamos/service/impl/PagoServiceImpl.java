@@ -4,15 +4,16 @@ import com.a.prestamos.exception.prestamo.ResourceNotFoundException;
 import com.a.prestamos.model.dao.CajaDao;
 import com.a.prestamos.model.dao.CuotaDao;
 import com.a.prestamos.model.dao.PagoDao;
+import com.a.prestamos.model.dao.PrestamoDao;
 import com.a.prestamos.model.dto.mercadoPago.MercadoPagoPreferenceResponse;
+import com.a.prestamos.model.dto.mora.ResultadoMora;
 import com.a.prestamos.model.dto.pago.PagoRequest;
 import com.a.prestamos.model.dto.pago.PagoResponse;
 import com.a.prestamos.model.entity.Cuota;
 import com.a.prestamos.model.entity.Pago;
-import com.a.prestamos.model.entity.enums.CajaState;
-import com.a.prestamos.model.entity.enums.InstallmentState;
-import com.a.prestamos.model.entity.enums.PaymentMethod;
-import com.a.prestamos.model.entity.enums.PaymentState;
+import com.a.prestamos.model.entity.Prestamo;
+import com.a.prestamos.model.entity.enums.*;
+import com.a.prestamos.service.IMoraService;
 import com.a.prestamos.service.IPagoService;
 import com.mercadopago.MercadoPagoConfig;
 import com.mercadopago.client.payment.PaymentClient;
@@ -45,7 +46,8 @@ public class PagoServiceImpl implements IPagoService {
 
     private final PagoDao pagoDao;
     private final CuotaDao cuotaDao;
-    //private final IMoraService moraService;
+    private final PrestamoDao prestamoDao;
+    private final IMoraService moraService;
     private final FacturacionServiceImpl facturacionService;
 
     @Value("${app.mercado-pago.access-token}")
@@ -81,73 +83,25 @@ public class PagoServiceImpl implements IPagoService {
             throw new IllegalStateException("La cuota ya está completamente pagada.");
         }
 
-        if (request.montoPagado().compareTo(cuota.getBalance()) > 0) {
-            throw new IllegalArgumentException("El monto no puede ser mayor al saldo pendiente.");
-        }
-
         // 3. Validar que no haya cuotas anteriores pendientes
         if (cuotaDao.existenCuotasAnterioresPendientes(cuota.getLoan().getId(), cuota.getNum())) {
             throw new IllegalStateException("Existen cuotas anteriores pendientes. Debe pagar en orden.");
         }
 
         // =================================================================================
-        // BLOQUE LÓGICA DE MORA (PROFESOR)
+        // BLOQUE LÓGICA DE MORA (CENTRALIZADA EN IMoraService)
         // =================================================================================
 
-        BigDecimal moraCalculada = BigDecimal.ZERO;
+        ResultadoMora res = moraService.calcularDistribucionMora(cuota, request.montoPagado());
 
-        // Solo calculamos mora si la fecha actual es mayor al vencimiento
-        if (LocalDate.now().isAfter(cuota.getDueDate())) {
-            // Regla: 1% del SALDO PENDIENTE (no del original)
-            moraCalculada = cuota.getBalance().multiply(TASA_MORA).setScale(2, RoundingMode.HALF_UP);
-        }
-
-        BigDecimal deudaTotalExigible = cuota.getBalance().add(moraCalculada);
-
-        // AHORA SÍ VALIDAMOS:
-        // Permitimos pagar hasta (Capital + Mora).
-        // Usamos una pequeña tolerancia de 0.05 por si hay temas de redondeo en efectivo,
-        // pero estrictamente no debería ser mayor a deudaTotalExigible.
-        if (request.montoPagado().compareTo(deudaTotalExigible) > 0) {
-            throw new IllegalArgumentException(
-                    "El monto (S/ " + request.montoPagado() + ") no puede ser mayor a la deuda total (Capital S/ " + cuota.getBalance() + " + Mora S/ " + moraCalculada + ")"
-            );
-        }
-
-        // LÓGICA DE PERDÓN DE MORA (PAGO PARCIAL)
-        // Si el cliente paga menos de la deudaTotalExigible, asumimos que es pago parcial -> Mora = 0
-        boolean esPagoParcial = request.montoPagado().compareTo(deudaTotalExigible) < 0;
-
-        BigDecimal moraACobrar = BigDecimal.ZERO;
-        BigDecimal capitalAmortizado = BigDecimal.ZERO;
-
-        // CASO 1: Cuota VENCIDA (Fecha actual > Vencimiento)
-        if (LocalDate.now().isAfter(cuota.getDueDate())) {
-            // Regla del profesor: "Si ya venció, ya tiene mora. Ya no se perdona."
-            // Prioridad de pago: Primero se paga la Mora, el resto a Capital.
-
-            if (request.montoPagado().compareTo(moraCalculada) <= 0) {
-                // El pago es tan pequeño que solo cubre mora (o parte de ella)
-                moraACobrar = request.montoPagado();
-                capitalAmortizado = BigDecimal.ZERO;
-            } else {
-                // Paga toda la mora y sobra dinero para capital
-                moraACobrar = moraCalculada;
-                capitalAmortizado = request.montoPagado().subtract(moraACobrar);
-            }
-        }
-        // CASO 2: Cuota AL DÍA (Pago puntual o adelantado)
-        else {
-            // Regla del profesor: "Si pago antes... ahí sí se perdona" [cite: 143]
-            moraACobrar = BigDecimal.ZERO;
-            capitalAmortizado = request.montoPagado();
-        }
+        BigDecimal moraACobrar = res.moraACobrar();
+        BigDecimal capitalAmortizado = res.capitalAmortizado();
+        boolean moraPerdonada = res.moraPerdonada();
 
         // =================================================================================
 
         // 5. Calcular redondeo si es efectivo
         BigDecimal ajusteRedondeo = BigDecimal.ZERO;
-        BigDecimal montoEfectivo = request.montoPagado();
         BigDecimal vuelto = BigDecimal.ZERO;
 
         if (request.metodoPago() == PaymentMethod.EFECTIVO) {
@@ -167,11 +121,10 @@ public class PagoServiceImpl implements IPagoService {
         Pago pago = new Pago();
         pago.setInstallment(cuota);
 
-        // OJO: amountPaid es lo que amortiza al capital en BD
-        // Actualizamos el objeto Pago con los valores calculados
+        // Solo capitalAmortizado va contra el capital de la cuota
         pago.setAmountPaid(capitalAmortizado);
         pago.setMontMora(moraACobrar);
-        pago.setMoraPerdonada(false);
+        pago.setMoraPerdonada(moraPerdonada);
 
         pago.setAmountReceived(request.montoRecibido());
         pago.setChange(vuelto);
@@ -182,10 +135,9 @@ public class PagoServiceImpl implements IPagoService {
         pago.setObservations(request.observaciones());
         pago.setPaymentState(PaymentState.ACTIVO);
 
-
-        // 7. Actualizar la cuota
-        BigDecimal nuevoMontoPagado = cuota.getAmountPaid().add(request.montoPagado());
-        BigDecimal nuevoSaldoPendiente = cuota.getBalance().subtract(request.montoPagado());
+        // 7. Actualizar la cuota USANDO SOLO CAPITAL AMORTIZADO
+        BigDecimal nuevoMontoPagado = cuota.getAmountPaid().add(capitalAmortizado);
+        BigDecimal nuevoSaldoPendiente = cuota.getBalance().subtract(capitalAmortizado);
 
         // Evitar saldo negativo
         if (nuevoSaldoPendiente.compareTo(BigDecimal.ZERO) < 0) {
@@ -199,10 +151,8 @@ public class PagoServiceImpl implements IPagoService {
         if (nuevoSaldoPendiente.compareTo(BigDecimal.ZERO) == 0) {
             cuota.setInstallmentState(InstallmentState.PAGADO);
         } else {
-            // Si queda saldo, sigue pendiente o vencido
             if (LocalDate.now().isAfter(cuota.getDueDate())) {
-                // Sigue vencida si queda saldo
-                cuota.setInstallmentState(InstallmentState.VENCIDO); // O VENCIDO si tienes ese estado
+                cuota.setInstallmentState(InstallmentState.VENCIDO);
             } else {
                 cuota.setInstallmentState(InstallmentState.PAGADO_PARCIAL);
             }
@@ -228,6 +178,20 @@ public class PagoServiceImpl implements IPagoService {
                 }
         );
 
+        // 10. VERIFICAR FIN DEL PRÉSTAMO
+        boolean prestamoCancelado = cuotaDao.findPrimeraCuotaPendiente(cuota.getLoan().getId())
+                .isEmpty();
+
+        if (prestamoCancelado) {
+            Prestamo prestamo = cuota.getLoan();
+
+            if (prestamo.getLoanState() != LoanState.CANCELADO) {
+                prestamo.setLoanState(LoanState.CANCELADO);
+                prestamoDao.save(prestamo);
+                log.info("🎉 ¡Préstamo ID {} cancelado totalmente!", prestamo.getId());
+            }
+        }
+
         log.info("Pago registrado exitosamente...");
         return PagoResponse.fromEntity(pagoGuardado);
     }
@@ -239,7 +203,6 @@ public class PagoServiceImpl implements IPagoService {
         cajaDao.findByEstado(CajaState.ABIERTA)
                 .orElseThrow(() -> new IllegalStateException("⛔ NO SE PUEDE PAGAR: La caja está cerrada. Abra caja para realizar operaciones."));
 
-
         // 1. Obtener la cuota
         Cuota cuota = cuotaDao.findById(cuotaId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cuota no encontrada con ID: " + cuotaId));
@@ -249,97 +212,78 @@ public class PagoServiceImpl implements IPagoService {
             throw new IllegalStateException("La cuota ya está completamente pagada.");
         }
 
-//        if (monto.compareTo(cuota.getBalance()) > 0) {
-//            throw new IllegalArgumentException("El monto no puede ser mayor al saldo pendiente.");
-//        }
-
         if (cuotaDao.existenCuotasAnterioresPendientes(cuota.getLoan().getId(), cuota.getNum())) {
             throw new IllegalStateException("Existen cuotas anteriores pendientes. Debe pagar en orden.");
         }
 
-        // --- CÁLCULO DE MORA PARA MERCADO PAGO ---
-        BigDecimal moraCalculada = BigDecimal.ZERO;
-        if (LocalDate.now().isAfter(cuota.getDueDate())) {
-            moraCalculada = cuota.getBalance().multiply(TASA_MORA).setScale(2, RoundingMode.HALF_UP);
+        // 3. Calcular distribución de mora y capital según la REGLA DE NEGOCIO CENTRALIZADA
+        ResultadoMora res = moraService.calcularDistribucionMora(cuota, monto);
+
+        BigDecimal moraCalculada = res.moraCalculada();      // Mora total calculada para esa cuota
+        BigDecimal moraACobrar = res.moraACobrar();          // Parte de la mora que efectivamente se cobra con este pago
+        BigDecimal capitalAmortizado = res.capitalAmortizado(); // Parte que va a capital
+        boolean moraPerdonada = res.moraPerdonada();
+
+        // (Opcional) Sanity check: capital + moraCobrar debe ser igual al monto
+        BigDecimal totalDistribuido = capitalAmortizado.add(moraACobrar);
+        if (totalDistribuido.compareTo(monto) != 0) {
+            log.warn("⚠️ Inconsistencia en ResultadoMora: capital({}) + moraACobrar({}) != monto({})",
+                    capitalAmortizado, moraACobrar, monto);
+            // Podrías lanzar excepción si quieres ser más estricto:
+            // throw new IllegalStateException("Inconsistencia en distribución de mora/capital");
         }
-
-        BigDecimal deudaTotalConMora = cuota.getBalance().add(moraCalculada);
-
-        // Validar que no pague más de lo que debe
-        if (monto.compareTo(deudaTotalConMora) > 0) {
-            throw new IllegalArgumentException("El monto excede la deuda total.");
-        }
-
-        // Lógica de Desglose:
-        // Si el montoPropuesto cubre TOTAL (Capital + Mora), creamos 2 ítems en MP.
-        // Si el montoPropuesto es menor, asumimos pago parcial -> Mora perdonada -> 1 ítem.
-
-        boolean esPagoTotal = monto.compareTo(deudaTotalConMora) == 0; // O muy cercano
-        // Nota: Si el usuario pone manualmente "pago 100" y la deuda es 100 + 1, es parcial.
 
         List<PreferenceItemRequest> items = new ArrayList<>();
 
         try {
-            // 3. Configurar Mercado Pago
+            // 4. Configurar Mercado Pago
             MercadoPagoConfig.setAccessToken(mercadoPagoAccessToken);
 
-            if (esPagoTotal && moraCalculada.compareTo(BigDecimal.ZERO) > 0) {
-                // ITEM 1: CAPITAL
+            // 5. Armar ítems según la distribución real
+            if (capitalAmortizado.compareTo(BigDecimal.ZERO) > 0) {
                 items.add(PreferenceItemRequest.builder()
                         .id("C-" + cuotaId)
                         .title("Pago Cuota #" + cuota.getNum())
-                        .description("Capital Pendiente")
+                        .description("Capital")
                         .quantity(1)
                         .currencyId("PEN")
-                        .unitPrice(cuota.getBalance())
-                        .build());
-
-                // ITEM 2: MORA
-                items.add(PreferenceItemRequest.builder()
-                        .id("M-" + cuotaId)
-                        .title("Mora por Retraso (1%)")
-                        .quantity(1)
-                        .currencyId("PEN")
-                        .unitPrice(moraCalculada)
-                        .build());
-            } else {
-                // PAGO PARCIAL (o sin mora): Todo es un solo concepto que va a capital
-                items.add(PreferenceItemRequest.builder()
-                        .id("C-" + cuotaId)
-                        .title("Abono a Cuota #" + cuota.getNum())
-                        .quantity(1)
-                        .currencyId("PEN")
-                        .unitPrice(monto) // El monto que puso el usuario
+                        .unitPrice(capitalAmortizado)
                         .build());
             }
 
+            if (moraACobrar.compareTo(BigDecimal.ZERO) > 0) {
+                items.add(PreferenceItemRequest.builder()
+                        .id("M-" + cuotaId)
+                        .title("Mora por Retraso")
+                        .quantity(1)
+                        .currencyId("PEN")
+                        .unitPrice(moraACobrar)
+                        .build());
+            }
 
             String urlRetorno = (backUrlBase != null && !backUrlBase.isEmpty())
                     ? backUrlBase
                     : "http://127.0.0.1:5500/src/pages/principal.html";
 
-            // Verificar si la URL es HTTPS para usar auto_return
             boolean esHttps = urlRetorno.startsWith("https://");
 
-            // 5. Configurar URLs de retorno
+            // 6. Configurar URLs de retorno
             PreferenceBackUrlsRequest backUrls = PreferenceBackUrlsRequest.builder()
                     .success(urlRetorno)
                     .failure(urlRetorno)
                     .pending(urlRetorno)
                     .build();
 
-            // 6. Crear la preferencia
+            // 7. Crear la preferencia
             var requestBuilder = PreferenceRequest.builder()
                     .items(items)
                     .backUrls(backUrls)
                     .externalReference("cuota_" + cuotaId + "_" + System.currentTimeMillis());
 
-            // SOLO agregar auto_return si la URL es HTTPS
             if (esHttps) {
                 requestBuilder.autoReturn("approved");
             }
 
-            // SOLO AGREGAR EL WEBHOOK SI NO ES LOCALHOST O SI ESTÁ VACÍO
             if (webhookUrl != null && webhookUrl.startsWith("https://")) {
                 requestBuilder.notificationUrl(webhookUrl);
             } else {
@@ -348,25 +292,17 @@ public class PagoServiceImpl implements IPagoService {
 
             Preference preference = new PreferenceClient().create(requestBuilder.build());
 
-            // 6. Crear registro de pago pendiente
+            // 8. Crear registro de pago pendiente usando la MISMA distribución
             Pago pagoPendiente = new Pago();
             pagoPendiente.setInstallment(cuota);
 
-            // Aquí guardamos provisionalmente. Cuando llegue el Webhook, confirmaremos la distribución real.
-            // Para simplificar, asumimos que si MP aprueba, se respeta la lógica de ítems enviada.
-            if (esPagoTotal) {
-                pagoPendiente.setAmountPaid(cuota.getBalance());
-                pagoPendiente.setMontMora(moraCalculada);
-                pagoPendiente.setMoraPerdonada(false);
-            } else {
-                pagoPendiente.setAmountPaid(monto);
-                pagoPendiente.setMontMora(BigDecimal.ZERO);
-                pagoPendiente.setMoraPerdonada(true);
-            }
+            pagoPendiente.setAmountPaid(capitalAmortizado);
+            pagoPendiente.setMontMora(moraACobrar);
+            pagoPendiente.setMoraPerdonada(moraPerdonada);
 
-            pagoPendiente.setAmountReceived(BigDecimal.ZERO);  // ✅ Agregar
-            pagoPendiente.setChange(BigDecimal.ZERO);          // ✅ Agregar
-            pagoPendiente.setRounding(BigDecimal.ZERO);        // ✅ Agregar
+            pagoPendiente.setAmountReceived(BigDecimal.ZERO);
+            pagoPendiente.setChange(BigDecimal.ZERO);
+            pagoPendiente.setRounding(BigDecimal.ZERO);
             pagoPendiente.setPaymentMethod(PaymentMethod.MERCADO_PAGO);
             pagoPendiente.setPaymentState(PaymentState.PENDIENTE);
             pagoPendiente.setMercadoPagoPreferenceId(preference.getId());
@@ -386,7 +322,6 @@ public class PagoServiceImpl implements IPagoService {
             );
 
         } catch (com.mercadopago.exceptions.MPApiException e) {
-            // CAPTURAMOS EL ERROR QUE VIENE DE MERCADO PAGO
             String errorResponse = e.getApiResponse().getContent();
             log.error("❌ ERROR MERCADO PAGO: {}", errorResponse);
             throw new RuntimeException("MP rechazó la solicitud: " + errorResponse);
@@ -396,6 +331,7 @@ public class PagoServiceImpl implements IPagoService {
             throw new RuntimeException("Error al procesar pago con Mercado Pago: " + e.getMessage());
         }
     }
+
 
     @Override
     @Transactional
