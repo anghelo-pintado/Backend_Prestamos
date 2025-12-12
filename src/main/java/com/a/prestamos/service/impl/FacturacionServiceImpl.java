@@ -28,15 +28,11 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -86,7 +82,6 @@ public class FacturacionServiceImpl {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void emitirComprobante(Long pagoId) {
         try {
-
             if (comprobanteDao.existsByPaymentId(pagoId)) {
                 log.info("Ya existe comprobante para el pago {}. Omitiendo.", pagoId);
                 return;
@@ -103,93 +98,89 @@ public class FacturacionServiceImpl {
             String tipoDoc = esRuc ? "01" : "03"; // 01 Factura, 03 Boleta
             String serie = esRuc ? "F001" : "B001";
 
-            // Obtener correlativo (Lógica simple, idealmente usar una secuencia en BD)
             long ultimoCorrelativo = comprobanteDao.countComprobantesBySerie(serie);
             String correlativo = String.format("%08d", ultimoCorrelativo + 1);
 
-            // 2. CALCULAR PROPORCIÓN DEL PAGO
-            BigDecimal montoPagado = pago.getAmountPaid();
-            BigDecimal totalCuota = cuota.getAmount(); // Monto total de la cuota
+            // =================================================================================
+            // LÓGICA DE MONTOS (CAPITAL + INTERÉS DE CUOTA)
+            // =================================================================================
+            BigDecimal montoPagadoCuota = pago.getAmountPaid(); // Esto es SOLO lo que amortiza la cuota
+            BigDecimal totalCuota = cuota.getAmount();
 
-            // Proporción pagada (ej: 50/88 = 0.568)
-            BigDecimal proporcion = montoPagado.divide(totalCuota, 10, RoundingMode.HALF_UP);
+            // Proporción pagada (ej: si paga media cuota)
+            BigDecimal proporcion = montoPagadoCuota.divide(totalCuota, 10, RoundingMode.HALF_UP);
 
-            // 3. Calcular montos proporcionales
-            BigDecimal interesOriginal = cuota.getInterest();
-            BigDecimal igvOriginal = cuota.getIgv();
-            BigDecimal capitalOriginal = cuota.getPrincipal();
+            BigDecimal interesProporcional = cuota.getInterest().multiply(proporcion).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal igvProporcional = cuota.getIgv().multiply(proporcion).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal capitalProporcional = cuota.getPrincipal().multiply(proporcion).setScale(2, RoundingMode.HALF_UP);
 
-            // Aplicar proporción
-            BigDecimal interesProporcional = interesOriginal.multiply(proporcion).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal igvProporcional = igvOriginal.multiply(proporcion).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal capitalProporcional = capitalOriginal.multiply(proporcion).setScale(2, RoundingMode.HALF_UP);
-
-            // Ajustar para que la suma sea exactamente el monto pagado
+            // Ajuste por redondeo para que sume exactamente montoPagadoCuota
             BigDecimal sumaParcial = interesProporcional.add(igvProporcional).add(capitalProporcional);
-            BigDecimal diferencia = montoPagado.subtract(sumaParcial);
-            capitalProporcional = capitalProporcional.add(diferencia); // Ajustar en capital
+            BigDecimal diferencia = montoPagadoCuota.subtract(sumaParcial);
+            capitalProporcional = capitalProporcional.add(diferencia);
 
-            // 4. Construir Detalles
+            // =================================================================================
+            // LÓGICA DE MORA (NUEVO)
+            // =================================================================================
+            BigDecimal montoMora = pago.getMontMora() != null ? pago.getMontMora() : BigDecimal.ZERO;
+            BigDecimal baseMora = BigDecimal.ZERO;
+            BigDecimal igvMora = BigDecimal.ZERO;
+
+            if (montoMora.compareTo(BigDecimal.ZERO) > 0) {
+                // La mora incluye IGV (precio final), así que desglosamos:
+                // Base = Mora / 1.18
+                baseMora = montoMora.divide(new BigDecimal("1.18"), 2, RoundingMode.HALF_UP);
+                igvMora = montoMora.subtract(baseMora);
+            }
+
+            // =================================================================================
+            // CONSTRUCCIÓN DE DETALLES
+            // =================================================================================
             List<InvoiceRequest.Detail> detalles = new ArrayList<>();
             BigDecimal totalGravadas = BigDecimal.ZERO;
             BigDecimal totalInafectas = BigDecimal.ZERO;
             BigDecimal totalIgv = BigDecimal.ZERO;
 
-            // ITEM A: Intereses (Gravado con IGV) - Solo si hay interés
+            // ITEM 1: Intereses Compensatorios (Gravado)
             if (interesProporcional.compareTo(BigDecimal.ZERO) > 0) {
                 BigDecimal precioUnitario = interesProporcional.add(igvProporcional);
-
-                detalles.add(InvoiceRequest.Detail.builder()
-                        .codProducto("INT-001")
-                        .unidad("ZZ")
-                        .descripcion("INTERESES POR PRESTAMO CUOTA " + cuota.getNum() +
-                                (proporcion.compareTo(BigDecimal.ONE) < 0 ? " (PAGO PARCIAL)" : ""))
-                        .cantidad(BigDecimal.ONE)
-                        .mtoValorUnitario(interesProporcional)
-                        .mtoValorVenta(interesProporcional)
-                        .mtoBaseIgv(interesProporcional)
-                        .porcentajeIgv(new BigDecimal("18"))
-                        .igv(igvProporcional)
-                        .tipAfeIgv(10)
-                        .totalImpuestos(igvProporcional)
-                        .mtoPrecioUnitario(precioUnitario)
-                        .build());
+                detalles.add(crearDetalle("INT-001", "INTERESES CUOTA " + cuota.getNum(),
+                        interesProporcional, igvProporcional, precioUnitario, 10)); // 10 = Gravado
 
                 totalGravadas = totalGravadas.add(interesProporcional);
                 totalIgv = totalIgv.add(igvProporcional);
             }
 
-            // ITEM B: Amortización Capital (Inafecto) - Solo si hay capital
+            // ITEM 2: Amortización Capital (Inafecto)
             if (capitalProporcional.compareTo(BigDecimal.ZERO) > 0) {
-                detalles.add(InvoiceRequest.Detail.builder()
-                        .codProducto("CAP-001")
-                        .unidad("ZZ")
-                        .descripcion("AMORTIZACIÓN DE CAPITAL CUOTA " + cuota.getNum() +
-                                (proporcion.compareTo(BigDecimal.ONE) < 0 ? " (PAGO PARCIAL)" : ""))
-                        .cantidad(BigDecimal.ONE)
-                        .mtoValorUnitario(capitalProporcional)
-                        .mtoValorVenta(capitalProporcional)
-                        .mtoBaseIgv(capitalProporcional)
-                        .porcentajeIgv(BigDecimal.ZERO)
-                        .igv(BigDecimal.ZERO)
-                        .tipAfeIgv(30)
-                        .totalImpuestos(BigDecimal.ZERO)
-                        .mtoPrecioUnitario(capitalProporcional)
-                        .build());
+                detalles.add(crearDetalle("CAP-001", "CAPITAL CUOTA " + cuota.getNum(),
+                        capitalProporcional, BigDecimal.ZERO, capitalProporcional, 30)); // 30 = Inafecto
 
                 totalInafectas = totalInafectas.add(capitalProporcional);
             }
 
-            // 5. Totales (deben sumar exactamente el monto pagado)
-            BigDecimal totalVenta = montoPagado; // Usar el monto pagado directamente
+            // ITEM 3: Mora (Gravado) - NUEVO BLOQUE
+            if (montoMora.compareTo(BigDecimal.ZERO) > 0) {
+                detalles.add(crearDetalle("MORA-001", "INTERESES MORATORIOS POR RETRASO",
+                        baseMora, igvMora, montoMora, 10)); // 10 = Gravado
 
-            // 6. Construir Invoice
-            String fechaEmision = LocalDate.now()
-                    .atStartOfDay()
-                    .atZone(ZoneId.of("America/Lima"))
+                totalGravadas = totalGravadas.add(baseMora);
+                totalIgv = totalIgv.add(igvMora);
+            }
+
+            // TOTAL FINAL (Cuota + Mora)
+            BigDecimal totalVenta = montoPagadoCuota.add(montoMora);
+
+            // Validación de seguridad (Opcional)
+            BigDecimal checkTotal = totalGravadas.add(totalInafectas).add(totalIgv);
+            // checkTotal debería ser igual a totalVenta (con diff de 0.01 max por redondeos)
+
+            // =================================================================================
+            // CONSTRUIR INVOICE
+            // =================================================================================
+            String fechaEmision = LocalDate.now().atStartOfDay().atZone(ZoneId.of("America/Lima"))
                     .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX"));
 
-            // 4. Construir Objeto Principal
             InvoiceRequest invoice = InvoiceRequest.builder()
                     .ublVersion("2.1")
                     .tipoOperacion("0101")
@@ -198,14 +189,11 @@ public class FacturacionServiceImpl {
                     .correlativo(correlativo)
                     .fechaEmision(fechaEmision)
                     .tipoMoneda("PEN")
-                    .formaPago(InvoiceRequest.FormaPago.builder()
-                            .moneda("PEN")
-                            .tipo("Contado")
-                            .build())
+                    .formaPago(InvoiceRequest.FormaPago.builder().moneda("PEN").tipo("Contado").build())
                     .client(InvoiceRequest.Client.builder()
-                            .tipoDoc(esRuc ? "6" : "1") // 6=RUC, 1=DNI
+                            .tipoDoc(esRuc ? "6" : "1")
                             .numDoc(cliente.getDocumentId())
-                            .rznSocial(cliente.getFullName()) // O Razón Social
+                            .rznSocial(cliente.getFullName())
                             .build())
                     .company(InvoiceRequest.Company.builder()
                             .ruc(emisorRuc)
@@ -230,17 +218,34 @@ public class FacturacionServiceImpl {
                     .details(detalles)
                     .legends(List.of(InvoiceRequest.Legend.builder()
                             .code("1000")
-                            .value(NumberToLetterConverter.convert(totalVenta).toUpperCase()) // Necesitas un utilitario para esto o hardcodear por ahora
+                            .value(NumberToLetterConverter.convert(totalVenta).toUpperCase())
                             .build()))
                     .build();
 
-            // 5. Enviar a la API
             enviarASunat(invoice, pago, serie, correlativo, tipoDoc);
 
         } catch (Exception e) {
             log.error("Error emitiendo comprobante para pago " + pagoId, e);
-            // No lanzamos excepción para no revertir el pago, solo logueamos el error de facturación
         }
+    }
+
+    // Helper para reducir código repetitivo
+    private InvoiceRequest.Detail crearDetalle(String codigo, String desc, BigDecimal valorUnitario,
+                                               BigDecimal igv, BigDecimal precioUnitario, int tipoAfe) {
+        return InvoiceRequest.Detail.builder()
+                .codProducto(codigo)
+                .unidad("ZZ")
+                .descripcion(desc)
+                .cantidad(BigDecimal.ONE)
+                .mtoValorUnitario(valorUnitario) // Valor sin IGV
+                .mtoValorVenta(valorUnitario)
+                .mtoBaseIgv(valorUnitario)
+                .porcentajeIgv(tipoAfe == 10 ? new BigDecimal("18") : BigDecimal.ZERO)
+                .igv(igv)
+                .tipAfeIgv(tipoAfe)
+                .totalImpuestos(igv)
+                .mtoPrecioUnitario(precioUnitario) // Precio con IGV
+                .build();
     }
 
     private void enviarASunat(InvoiceRequest invoice, Pago pago, String serie, String correlativo, String tipoDoc) {
