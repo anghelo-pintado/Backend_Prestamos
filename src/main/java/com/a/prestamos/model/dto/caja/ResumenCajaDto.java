@@ -7,6 +7,9 @@ public record ResumenCajaDto(
         String fechaApertura,
         BigDecimal saldoInicial,
         BigDecimal ingresosEfectivo, // Sistema
-        BigDecimal ingresosDigital,  // Sistema
-        BigDecimal totalEsperadoEnCaja // Saldo Inicial + Ingresos Efectivo
+        BigDecimal ingresosDigital,
+        BigDecimal totalReingresos,
+        BigDecimal totalVueltos, // Sistema
+        BigDecimal totalEsperadoEnCaja, // Saldo Inicial + Ingresos Efectivo
+        BigDecimal efectivoDisponible  // Efectivo real disponible para dar vuelto
 ) {}

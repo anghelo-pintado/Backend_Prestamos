@@ -64,10 +64,13 @@ public interface PagoDao extends JpaRepository<Pago, Long> {
     );
 
     /**
-     * Suma los pagos agrupados por método de pago desde una fecha dada.
-     * Útil para el arqueo de caja.
+     * ✅ CORREGIDO: Suma los pagos agrupados por método de pago desde una fecha dada.
+     * Devuelve: [PaymentMethod, SUM(amountReceived), SUM(change)]
+     * - amountReceived: Lo que el cliente entregó físicamente
+     * - change: El vuelto que se le devolvió
+     * El neto en caja = amountReceived - change
      */
-    @Query("SELECT p.paymentMethod, SUM(p.amountPaid), SUM(p.rounding) " +
+    @Query("SELECT p.paymentMethod, SUM(p.amountReceived), SUM(p.change) " +
             "FROM Pago p " +
             "WHERE p.paymentDate >= :fechaInicio " +
             "AND p.paymentState = 'ACTIVO' " +
