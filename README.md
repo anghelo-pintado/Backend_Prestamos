@@ -118,4 +118,4 @@ El código fuente se encuentra bajo `src/main/java/com/a/prestamos`:
 
 ## 📄 Licencia
 
-Este proyecto está bajo la Licencia MIT - mira el archivo [LICENSE.md](LICENSE.md) para detalles.
+Proyecto académico semestral.
